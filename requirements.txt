@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+psycopg[binary]
+requests
+pytest
+pytest-mock
+python-dotenv
+httpx
+ 
