@@ -41,26 +41,5 @@ The project is designed around a simple monitoring idea:
 ---
 
 ## Architecture
+<img width="1672" height="941" alt="image" src="https://github.com/user-attachments/assets/15b57fe8-1861-4b97-b437-20cb42e05373" />
 
-```text
-Open-Meteo API
-      |
-      v
-Python Poller
-      |
-      v
-Deduplication Layer
-city + timestamp unique check
-      |
-      v
-PostgreSQL Database
-      |
-      +----------------+
-      |                |
-      v                v
-Event Classifier     FastAPI API
-      |                |
-      v                v
-Events Table      /health
-                  /readings
-                  /events
