@@ -1,4 +1,4 @@
-from app.classifier import classify_reading
+from app.classifier import classify_reading, severity_from_score
 
 
 def make_reading(
@@ -25,6 +25,16 @@ def event_types(events):
     return {event["event_type"] for event in events}
 
 
+def event_by_type(events, event_type):
+    return [event for event in events if event["event_type"] == event_type][0]
+
+
+def assert_score_and_severity_match(event):
+    assert event["score"] is not None
+    assert 0.0 <= event["score"] <= 1.0
+    assert event["severity"] == severity_from_score(event["score"])
+
+
 def test_high_wind_event_fires_when_wind_is_above_threshold():
     reading = make_reading(city="Toronto", wind_speed_10m=48.0)
 
@@ -46,8 +56,10 @@ def test_precipitation_started_after_dry_previous_reading():
     current = make_reading(precipitation=1.2)
 
     events = classify_reading(current, {"previous_reading": previous})
+    event = event_by_type(events, "precipitation_started")
 
     assert "precipitation_started" in event_types(events)
+    assert_score_and_severity_match(event)
 
 
 def test_precipitation_started_does_not_fire_when_already_precipitating():
@@ -64,8 +76,10 @@ def test_precipitation_ended_after_wet_previous_reading():
     current = make_reading(precipitation=0.0)
 
     events = classify_reading(current, {"previous_reading": previous})
+    event = event_by_type(events, "precipitation_ended")
 
     assert "precipitation_ended" in event_types(events)
+    assert_score_and_severity_match(event)
 
 
 def test_precipitation_ended_does_not_fire_when_already_dry():
@@ -82,8 +96,10 @@ def test_snow_started_when_weather_code_enters_snow_group():
     current = make_reading(weather_code=71)
 
     events = classify_reading(current, {"previous_reading": previous})
+    event = event_by_type(events, "snow_started")
 
     assert "snow_started" in event_types(events)
+    assert_score_and_severity_match(event)
 
 
 def test_snow_started_does_not_fire_when_already_snowing():
@@ -100,8 +116,10 @@ def test_snow_ended_when_weather_code_leaves_snow_group():
     current = make_reading(weather_code=3)
 
     events = classify_reading(current, {"previous_reading": previous})
+    event = event_by_type(events, "snow_ended")
 
     assert "snow_ended" in event_types(events)
+    assert_score_and_severity_match(event)
 
 
 def test_snow_ended_does_not_fire_when_still_snowing():

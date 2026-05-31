@@ -176,16 +176,20 @@ def detect_precipitation_started(
     previous: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if not is_precipitating(previous) and is_precipitating(reading):
+        score = min(reading["precipitation"] / 5.0, 1.0)
+
         return [
             build_event(
                 reading,
                 "precipitation_started",
-                "medium",
+                severity_from_score(score),
                 f"Precipitation started in {reading['city']}.",
                 (
                     f"Previous reading had {previous['precipitation']:.1f} mm precipitation, "
-                    f"current reading has {reading['precipitation']:.1f} mm."
+                    f"current reading has {reading['precipitation']:.1f} mm. "
+                    f"Score={score:.2f}."
                 ),
+                score,
             )
         ]
 
@@ -197,16 +201,19 @@ def detect_precipitation_ended(
     previous: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if is_precipitating(previous) and not is_precipitating(reading):
+        score = min(previous["precipitation"] / 5.0, 1.0)
+
         return [
             build_event(
                 reading,
                 "precipitation_ended",
-                "low",
+                severity_from_score(score),
                 f"Precipitation ended in {reading['city']}.",
                 (
                     f"Previous reading had {previous['precipitation']:.1f} mm precipitation, "
-                    "current reading is dry."
+                    f"current reading is dry. Score={score:.2f}."
                 ),
+                score,
             )
         ]
 
@@ -218,16 +225,20 @@ def detect_snow_started(
     previous: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if not is_snow(previous) and is_snow(reading):
+        score = max(0.6, min(reading["wind_speed_10m"] / 60.0, 1.0))
+
         return [
             build_event(
                 reading,
                 "snow_started",
-                "medium",
+                severity_from_score(score),
                 f"Snow started in {reading['city']}.",
                 (
                     f"Weather code changed from {previous['weather_code']} to "
-                    f"{reading['weather_code']}, entering a snow condition."
+                    f"{reading['weather_code']}, entering a snow condition. "
+                    f"Score={score:.2f}."
                 ),
+                score,
             )
         ]
 
@@ -239,16 +250,20 @@ def detect_snow_ended(
     previous: dict[str, Any],
 ) -> list[dict[str, Any]]:
     if is_snow(previous) and not is_snow(reading):
+        score = 0.3
+
         return [
             build_event(
                 reading,
                 "snow_ended",
-                "low",
+                severity_from_score(score),
                 f"Snow ended in {reading['city']}.",
                 (
                     f"Weather code changed from {previous['weather_code']} to "
-                    f"{reading['weather_code']}, leaving a snow condition."
+                    f"{reading['weather_code']}, leaving a snow condition. "
+                    f"Score={score:.2f}."
                 ),
+                score,
             )
         ]
 
