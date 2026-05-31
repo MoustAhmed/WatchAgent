@@ -1,3 +1,14 @@
----
-alwaysApply: true
----
+# WatchAgent Event Schema Rule
+
+When creating or modifying notable weather events:
+
+- Every event must include: city, timestamp, event_type, severity, score, message, and reason.
+- Event types must be stable snake_case strings.
+- The reason field must explain the exact signal that made the event notable.
+- Avoid vague reasons such as "weather changed" or "threshold crossed."
+- Score must be between 0.0 and 1.0 when present.
+- Severity should match score:
+  - low: score < 0.4
+  - medium: 0.4 <= score < 0.7
+  - high: score >= 0.7
+- New event types must include positive and negative unit tests.
