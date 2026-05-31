@@ -62,13 +62,39 @@ def poll_once() -> None:
                 timestamp=reading["timestamp"],
             )
 
+            recent_readings = get_recent_readings(
+                city=city,
+                timestamp=reading["timestamp"],
+                window_minutes=EVENT_COOLDOWN_MINUTES,
+            )
+
+            latest_readings_by_city = get_latest_readings_by_city()
+
             context = {
                 "previous_reading": previous_reading,
+                "recent_readings": recent_readings,
+                "latest_readings_by_city": latest_readings_by_city,
             }
 
             events = classify_reading(reading, context)
 
             for event in events:
+                recent_event = get_recent_event(
+                    city=city,
+                    event_type=event["event_type"],
+                    timestamp=reading["timestamp"],
+                    cooldown_minutes=EVENT_COOLDOWN_MINUTES,
+                )
+
+                if not should_store_event(event, recent_event):
+                    logger.info(
+                        "Suppressed event %s for %s at %s",
+                        event["event_type"],
+                        city,
+                        reading["timestamp"],
+                    )
+                    continue
+
                 event_id = insert_event(event, reading_id)
                 logger.info(
                     "Stored event %s for %s: %s",

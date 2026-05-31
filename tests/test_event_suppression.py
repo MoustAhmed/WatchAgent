@@ -31,3 +31,15 @@ def test_event_stores_when_no_recent_event_exists():
     }
 
     assert should_store_event(event, None) is True
+
+
+def test_lower_severity_repeated_event_is_suppressed():
+    event = {
+        "severity": "low",
+    }
+
+    recent_event = {
+        "severity": "medium",
+    }
+
+    assert should_store_event(event, recent_event) is False

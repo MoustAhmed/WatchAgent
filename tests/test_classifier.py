@@ -86,6 +86,15 @@ def test_snow_started_when_weather_code_enters_snow_group():
     assert "snow_started" in event_types(events)
 
 
+def test_snow_started_does_not_fire_when_already_snowing():
+    previous = make_reading(weather_code=71)
+    current = make_reading(weather_code=73)
+
+    events = classify_reading(current, {"previous_reading": previous})
+
+    assert "snow_started" not in event_types(events)
+
+
 def test_snow_ended_when_weather_code_leaves_snow_group():
     previous = make_reading(weather_code=71)
     current = make_reading(weather_code=3)
@@ -93,6 +102,15 @@ def test_snow_ended_when_weather_code_leaves_snow_group():
     events = classify_reading(current, {"previous_reading": previous})
 
     assert "snow_ended" in event_types(events)
+
+
+def test_snow_ended_does_not_fire_when_still_snowing():
+    previous = make_reading(weather_code=71)
+    current = make_reading(weather_code=73)
+
+    events = classify_reading(current, {"previous_reading": previous})
+
+    assert "snow_ended" not in event_types(events)
 
 
 def test_storm_conditions_fire_with_high_wind_and_heavy_precipitation():
@@ -117,6 +135,19 @@ def test_storm_conditions_do_not_fire_with_only_heavy_precipitation():
     events = classify_reading(reading)
 
     assert "storm_conditions" not in event_types(events)
+
+
+def test_storm_conditions_do_not_fire_when_weather_code_is_snow():
+    reading = make_reading(
+        wind_speed_10m=50.0,
+        precipitation=4.0,
+        weather_code=71,
+    )
+
+    events = classify_reading(reading)
+
+    assert "storm_conditions" not in event_types(events)
+    assert "winter_storm_conditions" in event_types(events)
 
 
 def test_winter_storm_conditions_fire_with_snow_and_high_wind():
@@ -212,6 +243,22 @@ def test_weather_outlier_does_not_fire_for_small_difference():
     latest_by_city = {
         "Ottawa": make_reading(city="Ottawa", temperature_2m=19.0),
         "Toronto": make_reading(city="Toronto", temperature_2m=20.0),
+        "Vancouver": current,
+    }
+
+    events = classify_reading(
+        current,
+        {"latest_readings_by_city": latest_by_city},
+    )
+
+    assert "weather_outlier" not in event_types(events)
+
+
+def test_weather_outlier_does_not_fire_without_two_other_cities():
+    current = make_reading(city="Vancouver", temperature_2m=30.0)
+
+    latest_by_city = {
+        "Ottawa": make_reading(city="Ottawa", temperature_2m=18.0),
         "Vancouver": current,
     }
 
