@@ -1,0 +1,12 @@
+# WatchAgent Classifier Noise Control Rule
+
+When modifying classifier logic:
+
+- Prefer meaningful monitoring signals over small one-reading changes.
+- Good event triggers include state changes, compound risk, prolonged conditions, severity increases, and cross-city anomalies.
+- Do not assume Open-Meteo updates hourly. Treat the reading timestamp as the source of truth.
+- Use time windows instead of fixed reading counts for prolonged or pattern-based events.
+- Do not fire context-based events unless enough context exists.
+- Avoid repeated alerts for the same city and event type.
+- If an event is already active or recently emitted, suppress it unless severity increases.
+- Tests must prove both when an event fires and when it does not fire.
