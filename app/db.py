@@ -213,3 +213,36 @@ def get_events(city: str | None = None, limit: int = 50) -> list[dict[str, Any]]
         }
         for row in rows
     ]
+
+# db helper that gets the previous reading for a given city and timestamp
+def get_previous_reading(city: str, timestamp: str) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, city, timestamp, temperature_2m, apparent_temperature,
+                       precipitation, wind_speed_10m, weather_code, created_at
+                FROM readings
+                WHERE city = %s AND timestamp < %s
+                ORDER BY timestamp DESC
+                LIMIT 1;
+                """,
+                (city, timestamp),
+            )
+
+            row = cur.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "city": row[1],
+        "timestamp": row[2].isoformat(),
+        "temperature_2m": row[3],
+        "apparent_temperature": row[4],
+        "precipitation": row[5],
+        "wind_speed_10m": row[6],
+        "weather_code": row[7],
+        "created_at": row[8].isoformat(),
+    }
