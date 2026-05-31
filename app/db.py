@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import Any
 
 import psycopg
@@ -39,12 +38,50 @@ def init_db() -> None:
                     timestamp TIMESTAMPTZ NOT NULL,
                     event_type TEXT NOT NULL,
                     severity TEXT NOT NULL,
+                    score DOUBLE PRECISION,
                     message TEXT NOT NULL,
                     reason TEXT NOT NULL,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 """
             )
+
+            # Safe migration for existing local DBs created before score existed.
+            cur.execute(
+                """
+                ALTER TABLE events
+                ADD COLUMN IF NOT EXISTS score DOUBLE PRECISION;
+                """
+            )
+
+
+def row_to_reading(row) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "city": row[1],
+        "timestamp": row[2].isoformat(),
+        "temperature_2m": row[3],
+        "apparent_temperature": row[4],
+        "precipitation": row[5],
+        "wind_speed_10m": row[6],
+        "weather_code": row[7],
+        "created_at": row[8].isoformat(),
+    }
+
+
+def row_to_event(row) -> dict[str, Any]:
+    return {
+        "id": row[0],
+        "city": row[1],
+        "reading_id": row[2],
+        "timestamp": row[3].isoformat(),
+        "event_type": row[4],
+        "severity": row[5],
+        "score": row[6],
+        "message": row[7],
+        "reason": row[8],
+        "created_at": row[9].isoformat(),
+    }
 
 
 def insert_reading_if_new(reading: dict[str, Any]) -> int | None:
@@ -78,6 +115,40 @@ def insert_reading_if_new(reading: dict[str, Any]) -> int | None:
 
             row = cur.fetchone()
             return row[0] if row else None
+
+
+def insert_event(event: dict[str, Any], reading_id: int) -> int:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO events (
+                    city,
+                    reading_id,
+                    timestamp,
+                    event_type,
+                    severity,
+                    score,
+                    message,
+                    reason
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id;
+                """,
+                (
+                    event["city"],
+                    reading_id,
+                    event["timestamp"],
+                    event["event_type"],
+                    event["severity"],
+                    event.get("score"),
+                    event["message"],
+                    event["reason"],
+                ),
+            )
+
+            row = cur.fetchone()
+            return row[0]
 
 
 def count_readings() -> int:
@@ -123,51 +194,7 @@ def get_readings(city: str | None = None, limit: int = 50) -> list[dict[str, Any
 
             rows = cur.fetchall()
 
-    return [
-        {
-            "id": row[0],
-            "city": row[1],
-            "timestamp": row[2].isoformat(),
-            "temperature_2m": row[3],
-            "apparent_temperature": row[4],
-            "precipitation": row[5],
-            "wind_speed_10m": row[6],
-            "weather_code": row[7],
-            "created_at": row[8].isoformat(),
-        }
-        for row in rows
-    ]
-
-def insert_event(event: dict[str, Any], reading_id: int) -> int:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO events (
-                    city,
-                    reading_id,
-                    timestamp,
-                    event_type,
-                    severity,
-                    message,
-                    reason
-                )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id;
-                """,
-                (
-                    event["city"],
-                    reading_id,
-                    event["timestamp"],
-                    event["event_type"],
-                    event["severity"],
-                    event["message"],
-                    event["reason"],
-                ),
-            )
-
-            row = cur.fetchone()
-            return row[0]
+    return [row_to_reading(row) for row in rows]
 
 
 def get_events(city: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
@@ -177,7 +204,7 @@ def get_events(city: str | None = None, limit: int = 50) -> list[dict[str, Any]]
                 cur.execute(
                     """
                     SELECT id, city, reading_id, timestamp, event_type, severity,
-                           message, reason, created_at
+                           score, message, reason, created_at
                     FROM events
                     WHERE city = %s
                     ORDER BY timestamp DESC
@@ -189,7 +216,7 @@ def get_events(city: str | None = None, limit: int = 50) -> list[dict[str, Any]]
                 cur.execute(
                     """
                     SELECT id, city, reading_id, timestamp, event_type, severity,
-                           message, reason, created_at
+                           score, message, reason, created_at
                     FROM events
                     ORDER BY timestamp DESC
                     LIMIT %s;
@@ -199,22 +226,9 @@ def get_events(city: str | None = None, limit: int = 50) -> list[dict[str, Any]]
 
             rows = cur.fetchall()
 
-    return [
-        {
-            "id": row[0],
-            "city": row[1],
-            "reading_id": row[2],
-            "timestamp": row[3].isoformat(),
-            "event_type": row[4],
-            "severity": row[5],
-            "message": row[6],
-            "reason": row[7],
-            "created_at": row[8].isoformat(),
-        }
-        for row in rows
-    ]
+    return [row_to_event(row) for row in rows]
 
-# db helper that gets the previous reading for a given city and timestamp
+
 def get_previous_reading(city: str, timestamp: str) -> dict[str, Any] | None:
     with get_conn() as conn:
         with conn.cursor() as cur:
@@ -235,14 +249,78 @@ def get_previous_reading(city: str, timestamp: str) -> dict[str, Any] | None:
     if row is None:
         return None
 
-    return {
-        "id": row[0],
-        "city": row[1],
-        "timestamp": row[2].isoformat(),
-        "temperature_2m": row[3],
-        "apparent_temperature": row[4],
-        "precipitation": row[5],
-        "wind_speed_10m": row[6],
-        "weather_code": row[7],
-        "created_at": row[8].isoformat(),
-    }
+    return row_to_reading(row)
+
+
+def get_recent_readings(
+    city: str,
+    timestamp: str,
+    window_minutes: int = 120,
+) -> list[dict[str, Any]]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, city, timestamp, temperature_2m, apparent_temperature,
+                       precipitation, wind_speed_10m, weather_code, created_at
+                FROM readings
+                WHERE city = %s
+                  AND timestamp >= (%s::timestamptz - (%s || ' minutes')::interval)
+                  AND timestamp < %s::timestamptz
+                ORDER BY timestamp ASC;
+                """,
+                (city, timestamp, window_minutes, timestamp),
+            )
+
+            rows = cur.fetchall()
+
+    return [row_to_reading(row) for row in rows]
+
+
+def get_latest_readings_by_city() -> dict[str, dict[str, Any]]:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT DISTINCT ON (city)
+                       id, city, timestamp, temperature_2m, apparent_temperature,
+                       precipitation, wind_speed_10m, weather_code, created_at
+                FROM readings
+                ORDER BY city, timestamp DESC;
+                """
+            )
+
+            rows = cur.fetchall()
+
+    return {row[1]: row_to_reading(row) for row in rows}
+
+
+def get_recent_event(
+    city: str,
+    event_type: str,
+    timestamp: str,
+    cooldown_minutes: int = 120,
+) -> dict[str, Any] | None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, city, reading_id, timestamp, event_type, severity,
+                       score, message, reason, created_at
+                FROM events
+                WHERE city = %s
+                  AND event_type = %s
+                  AND timestamp >= (%s::timestamptz - (%s || ' minutes')::interval)
+                  AND timestamp < %s::timestamptz
+                ORDER BY timestamp DESC
+                LIMIT 1;
+                """,
+                (city, event_type, timestamp, cooldown_minutes, timestamp),
+            )
+
+            row = cur.fetchone()
+
+    if row is None:
+        return None
+
+    return row_to_event(row)
