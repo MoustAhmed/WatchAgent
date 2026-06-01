@@ -193,7 +193,7 @@ If Open-Meteo returns the same timestamp again, WatchAgent skips the duplicate.
 
 ## 4. Architecture
 
-<img width="1672" height="941" alt="WatchAgent architecture" src="https://github.com/user-attachments/assets/15b57fe8-1861-4b97-b437-20cb42e05373" />
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/f16ff737-d95c-4cae-98d4-d21365c1eacb" />
 
 ```text
 Open-Meteo API
