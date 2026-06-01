@@ -17,3 +17,4 @@ def test_analyze_weather_data_skill_runs(clean_db):
     assert "total_events" in data
     assert "readings_by_city" in data
     assert "events_by_type" in data
+    assert "average_event_score" in data
