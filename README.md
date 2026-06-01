@@ -1,146 +1,431 @@
 # WatchAgent: Weather Monitor & AI Assistant
 
-WatchAgent is a Python-based weather monitoring service built for an Infrastructure & AI take-home challenge. It monitors live weather across Ottawa, Toronto, and Vancouver, stores timestamped readings, detects notable weather events, and exposes the data through a FastAPI HTTP API.
+WatchAgent is a Python-based weather monitoring service built for an Infrastructure & AI take-home challenge. It monitors live weather across Ottawa, Toronto, and Vancouver, stores timestamped readings, detects notable weather events, and exposes readings/events through a FastAPI API.
 
-The project is designed around a simple monitoring idea:
+Core idea:
 
-> Poll frequently, store only new timestamped readings, classify meaningful events, and expose everything through an API.
+> Poll frequently, store only new timestamped readings, classify meaningful events, suppress noisy repeats, and expose everything through an API.
 
 ---
 
-## Current Features
+## 1. Overview
 
-- Polls Open-Meteo weather data for: Ottawa, Toronto, Vancouver
-- Stores weather readings in PostgreSQL
+### Features
+
+- Polls Open-Meteo weather data for Ottawa, Toronto, and Vancouver
+- Stores readings in PostgreSQL
 - Deduplicates readings by `city + timestamp`
-- Detects basic notable weather events
-- Stores events in the database
-- Exposes readings and events through FastAPI
+- Detects notable events using current, previous, recent, and cross-city context
+- Stores events with `severity`, `score`, `message`, and `reason`
+- Suppresses repeated same/lower-severity alerts within a cooldown window
+- Exposes `/health`, `/readings`, and `/events`
 - Runs with Docker Compose
-- Includes unit tests for:
-  - API response shape
-  - database deduplication
-  - event storage
-  - classifier logic
-  - poller behavior with mocked weather data
 - Includes GitHub Actions CI for tests and Docker build
+- Includes Cursor rules, reviewer agents, and a read-only data-analysis skill
 
----
-
-## Tech Stack
+### Tech Stack
 
 - **Python 3.11**
-- **FastAPI** for the HTTP API
-- **PostgreSQL** for persistent storage
-- **psycopg** for direct database access
-- **requests** for Open-Meteo API calls
-- **pytest** for testing
-- **Docker + Docker Compose** for local deployment
-- **GitHub Actions** for CI
-  
----
+- **FastAPI**
+- **PostgreSQL**
+- **psycopg**
+- **requests**
+- **pytest**
+- **Docker + Docker Compose**
+- **GitHub Actions**
 
-## Architecture
-<img width="1672" height="941" alt="image" src="https://github.com/user-attachments/assets/15b57fe8-1861-4b97-b437-20cb42e05373" />
+I used direct SQL through `psycopg` instead of an ORM because the schema is small, the queries are explicit, and database-level deduplication is easy to reason about.
 
 ---
 
-## Event Detection Design
+## 2. Quick Start
 
-WatchAgent groups notable weather events into four families:
+### macOS / Linux / Git Bash
 
-- **Current-risk events** identify hazards in the current reading, such as high wind or storm-like conditions.
-- **State-transition events** compare the current reading with the previous reading for the same city to detect when precipitation or snow starts or ends.
-- **Prolonged-condition events** use a 120-minute recent-reading window to detect sustained precipitation or sustained high wind.
-- **Cross-city anomaly events** compare the current city with the latest readings from the other monitored cities.
+```bash
+git clone https://github.com/MoustAhmed/WatchAgent.git
+cd WatchAgent
+cp .env.example .env
+docker compose up --build
+```
 
-Supported event types:
+### Windows PowerShell
 
-- `high_wind`
-- `precipitation_started`
-- `precipitation_ended`
-- `snow_started`
-- `snow_ended`
-- `storm_conditions`
-- `winter_storm_conditions`
-- `prolonged_precipitation`
-- `prolonged_high_wind`
-- `weather_outlier`
+```powershell
+git clone https://github.com/MoustAhmed/WatchAgent.git
+cd WatchAgent
+Copy-Item .env.example .env -Force
+docker compose up --build
+```
 
-### Event Catalog
+After startup, the stack runs:
 
-| event_type | Trigger condition | Required context | Scoring formula | Why it is meaningful |
-| --- | --- | --- | --- | --- |
-| `high_wind` | Current wind speed is at least 45.0 km/h | Current reading | `min(wind_speed_10m / 60.0, 1.0)` | High wind can affect infrastructure, travel, and outdoor safety. |
-| `precipitation_started` | Previous reading was dry and current precipitation is greater than 0 | `previous_reading` | `min(current precipitation / 5.0, 1.0)` | Detects a meaningful state change from dry to wet conditions. |
-| `precipitation_ended` | Previous reading had precipitation and current reading is dry | `previous_reading` | `min(previous precipitation / 5.0, 1.0)` | Marks the end of an active precipitation period. |
-| `snow_started` | Previous reading was not snow and current weather code is a snow code | `previous_reading` | `max(0.6, min(current wind_speed_10m / 60.0, 1.0))` | Snow onset is operationally important even when accumulation is not yet prolonged. |
-| `snow_ended` | Previous reading was snow and current weather code is not a snow code | `previous_reading` | `0.3` | Records the end of snow conditions as a low-severity recovery signal. |
-| `storm_conditions` | Wind is at least 45.0 km/h, precipitation is at least 3.0 mm, and current weather is not snow | Current reading | Average of `min(wind_speed_10m / 60.0, 1.0)` and `min(precipitation / 10.0, 1.0)` | Combines wind and rain intensity into a compound risk signal. |
-| `winter_storm_conditions` | Wind is at least 45.0 km/h and current weather code is a snow code | Current reading | `min(wind_speed_10m / 60.0, 1.0)` | Captures wind-driven snow conditions separately from rain storms. |
-| `prolonged_precipitation` | All readings in the 120-minute window have precipitation | `recent_readings` | `min(average precipitation / 5.0, 1.0)` | Sustained precipitation is more actionable than a single wet reading. |
-| `prolonged_high_wind` | All readings in the 120-minute window have wind speed at least 45.0 km/h | `recent_readings` | `min(average wind_speed_10m / 60.0, 1.0)` | Sustained high wind is more disruptive than a single gusty reading. |
-| `weather_outlier` | Current city is at least 8.0°C warmer or colder than the average of the other monitored cities | `latest_readings_by_city` with at least two other cities | `min(temperature difference / 15.0, 1.0)` | Flags city-level anomalies that stand out from the monitored region. |
+| Service | Purpose |
+|---|---|
+| `db` | PostgreSQL database |
+| `api` | FastAPI server at `http://localhost:8000` |
+| `poller` | Background Open-Meteo polling service |
+
+The API and poller wait for PostgreSQL to become healthy before starting. The poller then begins collecting readings automatically.
+
+### Environment Variables
+
+`.env.example`:
+
+```env
+DATABASE_URL=postgresql://watchagent:watchagent@db:5432/watchagent
+POLL_INTERVAL_SECONDS=300
+```
+
+No external API keys are required.
+
+---
+
+## 3. API Examples
+
+Run these in a second terminal while `docker compose up --build` is running.
+
+### Health Check
+
+```bash
+curl http://localhost:8000/health
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/health
+```
+
+Expected shape:
+
+```json
+{
+  "status": "ok",
+  "readings_stored": 3,
+  "events_stored": 0
+}
+```
+
+### Latest Readings
+
+```bash
+curl "http://localhost:8000/readings?limit=5"
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/readings?limit=5" | ConvertTo-Json -Depth 5
+```
+
+### Readings by City
+
+```bash
+curl "http://localhost:8000/readings?city=Ottawa&limit=5"
+curl "http://localhost:8000/readings?city=Toronto&limit=5"
+curl "http://localhost:8000/readings?city=Vancouver&limit=5"
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/readings?city=Ottawa&limit=5" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://localhost:8000/readings?city=Toronto&limit=5" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://localhost:8000/readings?city=Vancouver&limit=5" | ConvertTo-Json -Depth 5
+```
+
+### Latest Events
+
+```bash
+curl "http://localhost:8000/events?limit=5"
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/events?limit=5" | ConvertTo-Json -Depth 5
+```
+
+The response may be empty if live weather has not triggered a notable event yet:
+
+```json
+{
+  "events": []
+}
+```
+
+That is expected. Event logic is tested with controlled unit-test data.
+
+### Events by City
+
+```bash
+curl "http://localhost:8000/events?city=Ottawa&limit=5"
+curl "http://localhost:8000/events?city=Toronto&limit=5"
+curl "http://localhost:8000/events?city=Vancouver&limit=5"
+```
+
+Windows PowerShell:
+
+```powershell
+Invoke-RestMethod "http://localhost:8000/events?city=Ottawa&limit=5" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://localhost:8000/events?city=Toronto&limit=5" | ConvertTo-Json -Depth 5
+Invoke-RestMethod "http://localhost:8000/events?city=Vancouver&limit=5" | ConvertTo-Json -Depth 5
+```
+
+### Poller Logs
+
+```bash
+docker compose logs --tail=30 poller
+```
+
+Example:
+
+```text
+poller-1 | Stored new reading for Ottawa at 2026-05-31T20:15
+poller-1 | Stored new reading for Toronto at 2026-05-31T20:15
+poller-1 | Stored new reading for Vancouver at 2026-05-31T17:15
+```
+
+If Open-Meteo returns the same timestamp again, WatchAgent skips the duplicate.
+
+---
+
+## 4. Architecture
+
+<img width="1672" height="941" alt="WatchAgent architecture" src="https://github.com/user-attachments/assets/15b57fe8-1861-4b97-b437-20cb42e05373" />
+
+```text
+Open-Meteo API
+      ↓
+Poller Container
+      ↓
+Deduplication by city + timestamp
+      ↓
+PostgreSQL
+      ↓
+Classifier Context
+(previous reading, recent readings, latest readings by city)
+      ↓
+Event Classifier
+      ↓
+Suppression / Cooldown
+      ↓
+Events Table
+      ↓
+FastAPI API
+```
+
+The API and poller run as separate containers but share the same PostgreSQL database.
+
+---
+
+## 5. Event Detection Design
+
+WatchAgent groups events into four families:
+
+1. **Current-risk events**  
+   Detect hazards in the current reading.
+
+2. **State-transition events**  
+   Compare the current reading with the previous reading for the same city.
+
+3. **Prolonged-condition events**  
+   Use a 120-minute recent-reading window.
+
+4. **Cross-city anomaly events**  
+   Compare one city against the latest readings from the other monitored cities.
+
+### Supported Events
+
+| Event Type | Trigger | Context | Score |
+|---|---|---|---|
+| `high_wind` | Wind speed ≥ `45.0 km/h` | Current reading | `min(wind / 60.0, 1.0)` |
+| `precipitation_started` | Previous dry, current precipitation > `0` | `previous_reading` | `min(current_precip / 5.0, 1.0)` |
+| `precipitation_ended` | Previous wet, current dry | `previous_reading` | `min(previous_precip / 5.0, 1.0)` |
+| `snow_started` | Previous not snow, current snow code | `previous_reading` | `max(0.6, min(wind / 60.0, 1.0))` |
+| `snow_ended` | Previous snow, current not snow | `previous_reading` | `0.3` |
+| `storm_conditions` | Wind ≥ `45.0`, precipitation ≥ `3.0`, not snow | Current reading | Average of wind score and precipitation score |
+| `winter_storm_conditions` | Wind ≥ `45.0` and snow code | Current reading | `min(wind / 60.0, 1.0)` |
+| `prolonged_precipitation` | All readings in 120-minute window have precipitation | `recent_readings` | `min(avg_precip / 5.0, 1.0)` |
+| `prolonged_high_wind` | All readings in 120-minute window have wind ≥ `45.0` | `recent_readings` | `min(avg_wind / 60.0, 1.0)` |
+| `weather_outlier` | City differs by ≥ `8.0°C` from other-city average | `latest_readings_by_city` | `min(temp_diff / 15.0, 1.0)` |
 
 ### Thresholds
 
-- `HIGH_WIND_THRESHOLD = 45.0` km/h
-- `HEAVY_PRECIP_THRESHOLD = 3.0` mm
-- `PROLONGED_WINDOW_MINUTES = 120`
-- `WEATHER_OUTLIER_TEMP_DIFF = 8.0`°C
-- Snow WMO weather codes: `71`, `73`, `75`, `77`, `85`, `86`
+| Constant | Value |
+|---|---:|
+| `HIGH_WIND_THRESHOLD` | `45.0 km/h` |
+| `HEAVY_PRECIP_THRESHOLD` | `3.0 mm` |
+| `PROLONGED_WINDOW_MINUTES` | `120` |
+| `WEATHER_OUTLIER_TEMP_DIFF` | `8.0°C` |
+| `SNOW_CODES` | `71, 73, 75, 77, 85, 86` |
 
 ### Score and Severity
 
-Every event includes a score from `0.0` to `1.0`. Severity is derived from score:
+Every event has a score from `0.0` to `1.0`.
 
-- `low`: score < `0.4`
-- `medium`: `0.4 <= score < 0.7`
-- `high`: score >= `0.7`
-
-Transition events also receive scores:
-
-- `precipitation_started`: `min(current precipitation / 5.0, 1.0)`
-- `precipitation_ended`: `min(previous precipitation / 5.0, 1.0)`
-- `snow_started`: `max(0.6, min(current wind_speed_10m / 60.0, 1.0))`
-- `snow_ended`: `0.3`
+| Score Range | Severity |
+|---|---|
+| `< 0.4` | `low` |
+| `0.4 <= score < 0.7` | `medium` |
+| `>= 0.7` | `high` |
 
 ### Suppression / Alert Noise
 
-The poller applies a 120-minute cooldown per `city + event_type` before storing events. If the same event type was recently stored for the same city, repeated events with the same or lower severity are suppressed. A repeated event is stored only when its severity increases.
+The poller applies a 120-minute cooldown per `city + event_type`.
 
-This reduces alert fatigue during long-running weather conditions: a city with hours of high wind should not create a new identical alert every poll, but a worsening event can still be recorded.
+If the same event was recently stored for the same city:
+
+- same severity is suppressed
+- lower severity is suppressed
+- higher severity is stored
+
+This reduces alert fatigue during long-running weather conditions while still recording worsening events.
 
 ### Classifier Context
 
-`classify_reading()` accepts optional context so it can detect events that require more than the current reading:
-
-- `previous_reading` is used for state transitions such as precipitation or snow starting and ending.
-- `recent_readings` over the previous 120 minutes are used for prolonged precipitation and prolonged high wind.
-- `latest_readings_by_city` is used for `weather_outlier` comparisons across Ottawa, Toronto, and Vancouver.
+| Context Field | Used For |
+|---|---|
+| `previous_reading` | Precipitation/snow starting or ending |
+| `recent_readings` | Prolonged precipitation and prolonged high wind |
+| `latest_readings_by_city` | Cross-city `weather_outlier` |
 
 If required context is missing, context-dependent events do not fire.
 
 ---
 
-## Cursor Setup
+## 6. Testing
 
-This repository includes Cursor project guidance for event detection, testing, and review workflows.
+The test suite covers:
 
-Rules:
+- API response shape
+- database deduplication
+- event insertion
+- classifier event logic
+- transition event scoring
+- event suppression
+- poller context passing
+- poller behavior with mocked weather data
+- Cursor data-analysis skill execution
 
-- `.cursor/rules/event-schema.mdc` defines the event schema expectations: each event includes `city`, `timestamp`, `event_type`, `severity`, `score`, `message`, and `reason`; score stays between `0.0` and `1.0`; severity matches the score bands.
-- `.cursor/rules/classifier-noise-control.mdc` guides event rule design toward meaningful state changes, compound risks, prolonged conditions, severity increases, and cross-city anomalies.
-- `.cursor/rules/poller-error-handling.mdc` mirrors the classifier noise-control guidance for poller-facing event behavior and alert suppression.
-- `.cursor/rules/testin-policy.mdc` requires deterministic tests, mocked Open-Meteo calls in poller tests, `clean_db` for PostgreSQL tests, and positive/negative event detection coverage.
+For local tests, run only the database container. The API and poller containers should not be running because tests reset database tables.
 
-Agents:
+### Windows PowerShell
 
-- `.cursor/agents/event-detection-reviewer.md` reviews event rules, scoring, severity, context usage, suppression, test coverage, and README alignment.
-- `.cursor/agents/test-coverage-reviewer.md` reviews deterministic test coverage, Open-Meteo mocking, `clean_db` usage, API response shape tests, and event positive/negative cases.
+```powershell
+docker compose down
+docker compose up -d db
+$env:DATABASE_URL="postgresql://watchagent:watchagent@127.0.0.1:5433/watchagent?connect_timeout=5"
+.\.venv\Scripts\python.exe -m pytest -v
+```
 
-Skill:
+### macOS / Linux / Git Bash
 
-- `.cursor/skills/analyze_weather_data.py` is a read-only reporting script. It uses `SELECT` queries only and outputs structured JSON with reading counts, event counts, events by type, latest city readings, highest wind, largest apparent-temperature gap, and average event score.
+```bash
+docker compose down
+docker compose up -d db
+export DATABASE_URL="postgresql://watchagent:watchagent@127.0.0.1:5433/watchagent?connect_timeout=5"
+python -m pytest -v
+```
+
+---
+
+## 7. Cursor Setup
+
+This repository includes a committed `.cursor/` folder with project-specific rules, agents, and a read-only data-analysis skill.
+
+### Rules
+
+- `.cursor/rules/event-schema.mdc`  
+  Defines event schema expectations: `city`, `timestamp`, `event_type`, `severity`, `score`, `message`, and `reason`.
+
+- `.cursor/rules/classifier-noise-control.mdc`  
+  Guides event detection toward meaningful state changes, compound risk, prolonged conditions, severity increases, and cross-city anomalies.
+
+- `.cursor/rules/poller-error-handling.mdc`  
+  Defines poller behavior for failed API calls, duplicate readings, classifier execution, and event suppression.
+
+- `.cursor/rules/testing-policy.mdc`  
+  Requires deterministic tests, mocked Open-Meteo calls, `clean_db` usage for PostgreSQL tests, and positive/negative event coverage.
+
+### Agents
+
+- `.cursor/agents/event-detection-reviewer.md`  
+  Reviews event rules, scoring, severity, context usage, suppression, tests, and README alignment.
+
+- `.cursor/agents/test-coverage-reviewer.md`  
+  Reviews deterministic test coverage, Open-Meteo mocking, DB test setup, API response tests, and event positive/negative cases.
+
+### Skill
+
+- `.cursor/skills/analyze_weather_data.py`  
+  A read-only reporting script that uses `SELECT` queries only. It outputs JSON with reading counts, event counts, events by type, latest city readings, highest wind, largest apparent-temperature gap, and average event score.
+
+Run the skill locally:
+
+```powershell
+docker compose up -d db
+$env:DATABASE_URL="postgresql://watchagent:watchagent@127.0.0.1:5433/watchagent?connect_timeout=5"
+.\.venv\Scripts\python.exe .\.cursor\skills\analyze_weather_data.py
+```
 
 The Event Detection Reviewer was used during development to identify missing poller context, missing event suppression wiring, transition events without scores, and missing positive/negative tests.
+
+---
+
+## 8. CI
+
+GitHub Actions runs on every push to `main`.
+
+The pipeline has two jobs:
+
+1. **Test**
+   - Starts PostgreSQL
+   - Installs Python dependencies
+   - Runs `pytest -v`
+
+2. **Build**
+   - Runs `docker build .`
+
+This verifies that the test suite passes and the Docker image builds successfully on a clean machine.
+
+---
+
+## 9. Project Structure
+
+```text
+WatchAgent/
+  app/
+    classifier.py       Event detection logic
+    config.py           Environment configuration
+    db.py               PostgreSQL connection and queries
+    main.py             FastAPI application
+    open_meteo.py       Open-Meteo API client
+    poller.py           Background polling loop
+
+  tests/
+    test_api.py
+    test_classifier.py
+    test_cursor_skill.py
+    test_deduplication.py
+    test_event_suppression.py
+    test_events.py
+    test_poller.py
+
+  .cursor/
+    agents/
+    rules/
+    skills/
+
+  .github/
+    workflows/
+      ci.yml
+
+  Dockerfile
+  docker-compose.yml
+  requirements.txt
+  pytest.ini
+  .env.example
+  README.md
+```
