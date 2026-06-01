@@ -8,6 +8,12 @@ Core idea:
 
 ---
 
+## Architecture
+
+<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/f16ff737-d95c-4cae-98d4-d21365c1eacb" />
+
+---
+
 ## 1. Overview
 
 ### Features
@@ -191,10 +197,6 @@ If Open-Meteo returns the same timestamp again, WatchAgent skips the duplicate.
 
 ---
 
-## 4. Architecture
-
-<img width="1536" height="1024" alt="image" src="https://github.com/user-attachments/assets/f16ff737-d95c-4cae-98d4-d21365c1eacb" />
-
 ```text
 Open-Meteo API
       ↓
@@ -220,7 +222,7 @@ The API and poller run as separate containers but share the same PostgreSQL data
 
 ---
 
-## 5. Event Detection Design
+## 4. Event Detection Design
 
 WatchAgent groups events into four families:
 
@@ -295,7 +297,7 @@ If required context is missing, context-dependent events do not fire.
 
 ---
 
-## 6. Testing
+## 5. Testing
 
 The test suite covers:
 
@@ -331,7 +333,7 @@ python -m pytest -v
 
 ---
 
-## 7. Cursor Setup
+## 6. Cursor Setup
 
 This repository includes a committed `.cursor/` folder with project-specific rules, agents, and a read-only data-analysis skill.
 
@@ -374,7 +376,7 @@ The Event Detection Reviewer was used during development to identify missing pol
 
 ---
 
-## 8. CI
+## 7. CI
 
 GitHub Actions runs on every push to `main`.
 
@@ -392,7 +394,7 @@ This verifies that the test suite passes and the Docker image builds successfull
 
 ---
 
-## 9. Project Structure
+## 8. Project Structure
 
 ```text
 WatchAgent/
